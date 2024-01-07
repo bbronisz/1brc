@@ -14,4 +14,10 @@ internal static class Exts
 
     public static int GetNewLineIndex(this Span<byte> bytes) =>
         bytes.IndexOf(LF);
+
+    public static int GetLastNewLineIndex(this Span<byte> bytes) =>
+        bytes.LastIndexOf(LF);
+
+    public static int GetLastNewLineIndex(this ReadOnlySpan<byte> bytes) =>
+        bytes.LastIndexOf(LF);
 }

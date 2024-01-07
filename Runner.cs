@@ -96,6 +96,9 @@ class Runner
         prevSpan.CopyTo(wholeLine);
         bytesSpan.Slice(0, newLineIndex).CopyTo(wholeLine.Slice(prevSpan.Length));
 
+        //Console.WriteLine(string.Concat("[", Encoding.UTF8.GetString(prevSpan), "] [", Encoding.UTF8.GetString(bytesSpan.Slice(0, newLineIndex)), "] [",
+        //    Encoding.UTF8.GetString(wholeLine)));
+
         AddCity(wholeLine);
 
         return true;
@@ -104,12 +107,14 @@ class Runner
     private void AddCity(ReadOnlySpan<byte> line)
     {
         var separatorIndex = line.IndexOf((byte)';');
+        if (separatorIndex < 0)
+            throw new Exception(string.Format("Wrongly formatted line: {0}", Encoding.UTF8.GetString(line)));
         var citySpan = line.Slice(0, separatorIndex);
         var hc = new HashCode();
         hc.AddBytes(citySpan);
         var hashCode = hc.ToHashCode();
         //var hashCode = (int)byteSpan[0];
-        var value = 0d;//double.Parse(byteSpan.Slice(separatorIndex + 1, index - separatorIndex - 1));
+        var value = double.Parse(line.Slice(separatorIndex + 1));
         if (results.TryGetValue(hashCode, out CityInfo? cityInfo))
             cityInfo.Add(value);
         else
@@ -118,11 +123,23 @@ class Runner
 
     private static unsafe ReadOnlySpan<byte> GetPrev(MemoryMappedViewAccessor prevAccessor, Span<byte> buffer)
     {
-        prevAccessor.SafeMemoryMappedViewHandle.ReadSpan(0, buffer);
-        var index = buffer.GetNewLineIndex();
-        if (index < 0 || index == buffer.Length - Consts.NewLineLength)
-            return [];
-        return buffer.Slice(index + Consts.NewLineLength);
+        byte* bytes = null;
+        prevAccessor.SafeMemoryMappedViewHandle.AcquirePointer(ref bytes);
+        try
+        {
+            var localspan = new ReadOnlySpan<byte>(bytes, (int)prevAccessor.SafeMemoryMappedViewHandle.ByteLength);
+            //Console.WriteLine("len: {0}", localspan.Length);
+            var index = localspan.GetLastNewLineIndex();
+            if (index < 0 || index == localspan.Length - Consts.NewLineLength)
+                return [];
+            localspan = localspan.Slice(index + Consts.NewLineLength);
+            localspan.CopyTo(buffer);
+            return buffer.Slice(0, localspan.Length);
+        }
+        finally
+        {
+            prevAccessor.SafeMemoryMappedViewHandle.ReleasePointer();
+        }
     }
 }
 
