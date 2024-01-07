@@ -3,24 +3,55 @@ using System.Diagnostics;
 using System.IO.MemoryMappedFiles;
 using System.Text;
 
-const string path = @"C:\Users\bbr\Downloads\measurements-big.txt";
+const string path = @"C:\Users\bbr\Downloads\measurements-big.txt";//measurements-big.txt";
 
 await ReadUnsafe(path);
 
 async Task ReadUnsafe(string path)
 {
-    Console.WriteLine("Start!");
+    Console.OutputEncoding = Encoding.UTF8;
+    Console.WriteLine("Start Wrocław Suwałki!");
     using var proc = Process.GetCurrentProcess();
     var sw = Stopwatch.StartNew();
     using (var mmf = MemoryMappedFile.CreateFromFile(path, FileMode.Open))
     {
         var tasks = GetTasks(mmf);
         await Task.WhenAll(tasks.Select(x => x.Awaitable));
+        Console.WriteLine();
         Console.WriteLine("Sum: {0}", tasks.Select(x => (long)x.Result).Sum());
+        var result = tasks.First().Results;
+        foreach (var task in tasks.Skip(1))
+            foreach (var kv in task.Results)
+            {
+                if (result.TryGetValue(kv.Key, out CityInfo? cityInfo))
+                {
+                    cityInfo.Merge(kv.Value);
+                    continue;
+                }
+                result.Add(kv.Key, kv.Value);
+            }
+        Console.Write("{");
+        foreach (var item in result.OrderBy(x => x.Value.City))
+        {
+            item.Value.PrintResult();
+        }
+        Console.WriteLine("}");
     }
     double peak = proc.PeakWorkingSet64;
     peak = peak / (1024 * 1024);
     Console.WriteLine("Finished: {0:0.###} sec; peak: {1:0.###} MB", sw.Elapsed.TotalSeconds, peak);
+}
+
+unsafe void ReadText(MemoryMappedFile mmf)
+{
+    using (var acc = mmf.CreateViewAccessor(0, 14000, MemoryMappedFileAccess.Read))
+    {
+        byte* bytes = null;
+        acc.SafeMemoryMappedViewHandle.AcquirePointer(ref bytes);
+        var span = new ReadOnlySpan<byte>(bytes, 14000);
+        Console.WriteLine(Encoding.UTF8.GetString(span));
+        acc.SafeMemoryMappedViewHandle.ReleasePointer();
+    }
 }
 
 List<Runner> GetTasks(MemoryMappedFile mmf)
@@ -43,9 +74,9 @@ List<Runner> GetTasks(MemoryMappedFile mmf)
     var prevAccessor = offset > 0 ? mmf.CreateViewAccessor(offset - 100, 100, MemoryMappedFileAccess.Read) : null;
     try
     {
-        var length = Consts.QuarterOfGB;
+        var length = Consts.OneThreadBlockSize;
         var accessor = mmf.CreateViewAccessor(offset, length, MemoryMappedFileAccess.Read);
-        offset += Consts.QuarterOfGB;
+        offset += Consts.OneThreadBlockSize;
         return (accessor, prevAccessor, length, false);
     }
     catch (Exception)
@@ -60,7 +91,7 @@ class Runner
 {
     private readonly MemoryMappedViewAccessor accessor;
     private readonly MemoryMappedViewAccessor? prevAccessor;
-    private readonly Dictionary<string, CityInfo> results;
+    private readonly Dictionary<int, CityInfo> results;
     private readonly int length;
     public Runner(MemoryMappedViewAccessor accessor, MemoryMappedViewAccessor? prevAccessor, int length)
     {
@@ -73,13 +104,13 @@ class Runner
             this.length = (int)accessor.SafeMemoryMappedViewHandle.ByteLength;
             //Console.WriteLine("Byte length: {0}", this.length);
         }
-        results = new Dictionary<string, CityInfo>();
+        results = new Dictionary<int, CityInfo>(512);
         Awaitable = Task.Run(() => CountLines());
     }
 
     public Task Awaitable { get; }
     public int Result { get; private set; }
-    public Dictionary<string, CityInfo> Results => results;
+    public Dictionary<int, CityInfo> Results => results;
 
     unsafe void CountLines()
     {
@@ -92,6 +123,7 @@ class Runner
             {
                 var byteSpan = new ReadOnlySpan<byte>(buffor, length);
                 var index = byteSpan.IndexOf((byte)'\n');
+                count++;
                 byteSpan = byteSpan.Slice(index + 1);
                 index = byteSpan.IndexOf((byte)'\n');
 
@@ -99,12 +131,15 @@ class Runner
                 {
                     count++;
                     var separatorIndex = byteSpan.IndexOf((byte)';');
-                    var city = Encoding.UTF8.GetString(byteSpan.Slice(0, separatorIndex));
-                    var value = double.Parse(byteSpan.Slice(separatorIndex + 1, index));
-                    if (results.TryGetValue(city, out CityInfo? cityInfo))
+                    var citySpan = byteSpan.Slice(0, separatorIndex);
+                    var hc = new HashCode();
+                    hc.AddBytes(citySpan);
+                    var hashCode = hc.ToHashCode();
+                    var value = double.Parse(byteSpan.Slice(separatorIndex + 1, index - separatorIndex - 1));
+                    if (results.TryGetValue(hashCode, out CityInfo? cityInfo))
                         cityInfo.Add(value);
                     else
-                        results.Add(city, new CityInfo(value));
+                        results.Add(hashCode, new CityInfo(Encoding.UTF8.GetString(citySpan), value));
                     if (byteSpan.Length <= index + 1)
                         break;
                     byteSpan = byteSpan.Slice(index + 1);
@@ -116,18 +151,23 @@ class Runner
                 accessor.SafeMemoryMappedViewHandle.ReleasePointer();
             }
         }
-        Console.WriteLine(count);
+        //Console.Write('.');
         Result = count;
     }
 }
 
 class CityInfo
 {
-    public CityInfo(double value)
+    public CityInfo(string city, double value)
     {
+        City = city;
+        //HashCode = hashCode;
         Min = Max = Sum = value;
         Count = 1;
     }
+
+    //public int HashCode { get; }
+    public string City { get; }
     public double Min { get; private set; }
     public double Max { get; private set; }
     public double Sum { get; private set; }
@@ -147,6 +187,11 @@ class CityInfo
         if (other.Min > Max) Max = other.Max;
         Sum += other.Sum;
         Count += other.Count;
+    }
+
+    public void PrintResult()
+    {
+        Console.Write("{0}={1:0.0}/{2:0.0}/{3:0.0}, ", City, Min, Sum / Count, Max);
     }
 }
 
