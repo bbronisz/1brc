@@ -93,7 +93,7 @@ internal class Program
         foreach (var item in result.OrderBy(x => x.Value.City))
         {
             item.Value.PrintResult(prev);
-            prev = ",\n";
+            prev = ", ";
         }
         Console.WriteLine("}");
     }
