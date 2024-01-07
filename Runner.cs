@@ -8,7 +8,7 @@ class Runner
     private readonly MemoryMappedViewAccessor? prevAccessor;
     private readonly Dictionary<int, CityInfo> results;
     private readonly int length;
-    private readonly TaskCompletionSource taskSource;
+    private readonly Thread thread;
 
     public Runner(MemoryMappedViewAccessor accessor, MemoryMappedViewAccessor? prevAccessor, int length)
     {
@@ -22,14 +22,14 @@ class Runner
             //Console.WriteLine("Byte length: {0}", this.length);
         }
         results = new Dictionary<int, CityInfo>(512);
-        taskSource = new TaskCompletionSource();
-        Awaitable = taskSource.Task;
-        new Thread(ThreadMethod).Start();
+        thread = new Thread(ThreadMethod);
+        thread.Start();
     }
 
-    public Task Awaitable { get; }
     public int Result { get; private set; }
     public Dictionary<int, CityInfo> Results => results;
+
+    public void Join() => thread.Join();
 
     private void ThreadMethod()
     {
@@ -39,7 +39,7 @@ class Runner
         }
         catch (Exception ex)
         {
-            taskSource.SetException(ex);
+            Console.WriteLine(ex.ToString());
         }
     }
 
@@ -56,6 +56,7 @@ class Runner
                 var index = byteSpan.GetNewLineIndex();
                 if (HandleSplitInTheMiddle(byteSpan, index))
                 {
+                    count++;
                     byteSpan = byteSpan.Slice(index + 1);
                     index = byteSpan.GetNewLineIndex();
                 }
@@ -81,7 +82,6 @@ class Runner
         }
         //Console.Write('.');
         Result = count;
-        taskSource.SetResult();
     }
 
     private bool HandleSplitInTheMiddle(ReadOnlySpan<byte> bytesSpan, int newLineIndex)
@@ -114,11 +114,55 @@ class Runner
         hc.AddBytes(citySpan);
         var hashCode = hc.ToHashCode();
         //var hashCode = (int)byteSpan[0];
-        var value = double.Parse(line.Slice(separatorIndex + 1));
+        var value = ParseNumber(line.Slice(separatorIndex + 1));
         if (results.TryGetValue(hashCode, out CityInfo? cityInfo))
             cityInfo.Add(value);
         else
             results.Add(hashCode, new CityInfo(Encoding.UTF8.GetString(citySpan), value));
+    }
+
+    private static double ParseNumber(ReadOnlySpan<byte> line)
+    {
+        var sign = 1d;
+        if (line[0] == '-')
+        {
+            sign = -1d;
+            line = line.Slice(1);
+        }
+        var dotIndex = line.IndexOf((byte)'.');
+        if (dotIndex < 0)
+        {
+            return GetNatural(line) * sign;
+        }
+        double result = GetNatural(line.Slice(0, dotIndex));
+        result += GetDecimal(line.Slice(dotIndex + 1));
+        return sign * result;
+    }
+
+    private static int GetNatural(ReadOnlySpan<byte> line)
+    {
+        var dec = 1;
+        var result = 0;
+        for (var i = line.Length - 1; i >= 0; i--)
+        {
+            result += (line[i] - '0') * dec;
+            dec *= 10;
+        }
+        return result;
+    }
+
+    private static double GetDecimal(ReadOnlySpan<byte> line)
+    {
+        if (line.IsEmpty)
+            return 0d;
+        var result = 0d;
+        var dec = 0.1;
+        foreach (var c in line)
+        {
+            result += (c - '0') * dec;
+            dec /= 10;
+        }
+        return result;
     }
 
     private static unsafe ReadOnlySpan<byte> GetPrev(MemoryMappedViewAccessor prevAccessor, Span<byte> buffer)

@@ -6,7 +6,7 @@ using System.Text;
 
 internal class Program
 {
-    private static async Task Main(string[] args)
+    private static void Main(string[] args)
     {
         Console.OutputEncoding = Encoding.UTF8;
 
@@ -15,46 +15,52 @@ internal class Program
             return;
 
         if (debug)
-            await RunWithDebugInfo(filePath!);
+            RunWithDebugInfo(filePath!);
         else
-            await RunWithoutDebugInfo(filePath!);
+            RunWithoutDebugInfo(filePath!);
     }
 
-    private static async Task RunWithoutDebugInfo(string path)
+    private static void RunWithoutDebugInfo(string path)
     {
-        var runners = await ReadUnsafe(path);
+        var runners = ReadUnsafe(path);
         var result = GetResult(runners);
         DumpResult(result);
     }
 
-    private static async Task<List<Runner>> ReadUnsafe(string path)
+    private static List<Runner> ReadUnsafe(string path)
     {
         using (var mmf = MemoryMappedFile.CreateFromFile(path, FileMode.Open))
         {
-            var runners = GetTasks(mmf);
-            await Task.WhenAll(runners.Select(x => x.Awaitable));
+            var runners = GetRunners(mmf);
+            foreach (var runner in runners)
+            {
+                runner.Join();
+            }
             return runners;
         }
     }
 
-    private static List<Runner> GetTasks(MemoryMappedFile mmf)
+    private static List<Runner> GetRunners(MemoryMappedFile mmf)
     {
         long offset = 0;
-        (MemoryMappedViewAccessor accessor, MemoryMappedViewAccessor? prevAccessor, int length, bool last) accessorInfo;
+        MemoryMappedViewAccessor accessor;
+        MemoryMappedViewAccessor? prevAccessor;
+        int length;
+        bool last;
         var tasks = new List<Runner>();
         do
         {
-            accessorInfo = GetAccessor(mmf, ref offset);
+            (accessor, prevAccessor, length, last) = GetAccessor(mmf, ref offset);
             //Console.WriteLine("Creating runner: {0}", tasks.Count);
-            tasks.Add(new Runner(accessorInfo.accessor, accessorInfo.prevAccessor, accessorInfo.length));
+            tasks.Add(new Runner(accessor, prevAccessor, length));
         }
-        while (!accessorInfo.last);
+        while (!last);
         return tasks;
     }
 
     private static (MemoryMappedViewAccessor accessor, MemoryMappedViewAccessor? prevAccessor, int length, bool last) GetAccessor(MemoryMappedFile mmf, ref long offset)
     {
-        var prevAccessor = offset > 0 ? mmf.CreateViewAccessor(offset - Consts.PrevAccessorLength, Consts.PrevAccessorLength, MemoryMappedFileAccess.Read) : null;
+        MemoryMappedViewAccessor? prevAccessor = offset > 0 ? mmf.CreateViewAccessor(offset - Consts.PrevAccessorLength, Consts.PrevAccessorLength, MemoryMappedFileAccess.Read) : null;
         try
         {
             var length = Consts.OneThreadBlockSize;
@@ -121,21 +127,21 @@ internal class Program
         return true;
     }
 
-    private static async Task RunWithDebugInfo(string path)
+    private static void RunWithDebugInfo(string path)
     {
         Console.WriteLine("Start!");
+        Console.WriteLine();
+
         using var proc = Process.GetCurrentProcess();
         var sw = Stopwatch.StartNew();
-        var sw2 = new Stopwatch();
-        var runners = await ReadUnsafe(path);
-        Console.WriteLine();
-        Console.WriteLine("Sum: {0}", runners.Select(x => x.Result).Sum());
-        sw2.Start();
+        var runners = ReadUnsafe(path);
         var result = GetResult(runners);
-        sw2.Stop();
+        sw.Stop();
         DumpResult(result);
         double peak = proc.PeakWorkingSet64;
         peak = peak / (1024 * 1024);
-        Console.WriteLine("Finished: {0:0.###} sec; merging took: {2:0.###} ms; peak: {1:0.###} MB", sw.Elapsed.TotalSeconds, peak, sw2.Elapsed.TotalMilliseconds);
+        Console.WriteLine();
+        var sum = runners.Select(x => x.Result).Sum();
+        Console.WriteLine("Finished: {0:0.###} sec; peak: {1:0.###} MB; lines: {2}", sw.Elapsed.TotalSeconds, peak, sum);
     }
 }
