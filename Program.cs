@@ -40,7 +40,6 @@ List<Runner> GetTasks(MemoryMappedFile mmf)
 
 (MemoryMappedViewAccessor accessor, MemoryMappedViewAccessor? prevAccessor, int length, bool last) GetAccessor(MemoryMappedFile mmf, ref long offset)
 {
-    //int goBack = FindLastNewLine(mmf, offset);
     var prevAccessor = offset > 0 ? mmf.CreateViewAccessor(offset - 100, 100, MemoryMappedFileAccess.Read) : null;
     try
     {
@@ -56,81 +55,6 @@ List<Runner> GetTasks(MemoryMappedFile mmf)
     }
 }
 
-(MemoryMappedViewAccessor accessor, int length, bool last) GetTheRestAccessor(MemoryMappedFile mmf, long offset, int goBack)
-{
-    var accessor = mmf.CreateViewAccessor(offset, 0);
-    if (goBack == 0)
-        return (accessor, 0, true);
-    using (accessor)
-    {
-        var length = (int)accessor.SafeMemoryMappedViewHandle.ByteLength;
-        Console.WriteLine("Bytes length: {0}", length);
-        length += goBack;
-        return TryFindAccessor(mmf, offset - goBack, length);
-    }
-}
-
-(MemoryMappedViewAccessor accessor, int length, bool last) TryFindAccessor(MemoryMappedFile mmf, long offset, int length)
-{
-    (var accessor, int realLength) = GetSmaller(mmf, offset, length, 1024);
-    return (accessor, realLength, true);
-}
-
-(MemoryMappedViewAccessor accessor, int length) GetSmaller(MemoryMappedFile mmf, long offset, int length, int jump)
-{
-    try
-    {
-        var accessor = mmf.CreateViewAccessor(offset, length - jump);
-        if (jump == 1)
-            return (accessor, length - 1);
-        return GetBigger(mmf, offset, length, jump / 2);
-    }
-    catch
-    {
-        return GetSmaller(mmf, offset, length - jump, jump);
-    }
-}
-
-(MemoryMappedViewAccessor accessor, int length) GetBigger(MemoryMappedFile mmf, long offset, int length, int jump)
-{
-    try
-    {
-        var accessor = mmf.CreateViewAccessor(offset, length + jump);
-        if (jump == 1)
-            return (accessor, length + 1);
-        return GetBigger(mmf, offset, length + jump, jump);
-    }
-    catch
-    {
-        return GetSmaller(mmf, offset, length, jump / 2);
-    }
-}
-
-unsafe int FindLastNewLine(MemoryMappedFile memoryMappedFile, long offset)
-{
-    const int searchSize = 100;
-    if (offset == 0)
-        return 0;
-    using (var accessor = memoryMappedFile.CreateViewAccessor(offset - searchSize, searchSize))
-    {
-        byte* buffor = null;
-        accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref buffor);
-        try
-        {
-            var byteSpan = new ReadOnlySpan<byte>(buffor, searchSize);
-            var index = byteSpan.LastIndexOf((byte)'\n');
-            if (index < 0)
-                throw new Exception("Search size is too small");
-            var goback = searchSize - index - 1;
-            Console.WriteLine("Back: {0}", goback);
-            return goback;
-        }
-        finally
-        {
-            accessor.SafeMemoryMappedViewHandle.ReleasePointer();
-        }
-    }
-}
 
 class Runner
 {
@@ -170,8 +94,6 @@ class Runner
                 var index = byteSpan.IndexOf((byte)'\n');
                 byteSpan = byteSpan.Slice(index + 1);
                 index = byteSpan.IndexOf((byte)'\n');
-                //ReadOnlySpan<byte> lastLine = ReadOnlySpan<byte>.Empty;
-                //ReadOnlySpan<byte> prevlastLine = ReadOnlySpan<byte>.Empty;
 
                 while (index >= 0)
                 {
@@ -185,23 +107,9 @@ class Runner
                         results.Add(city, new CityInfo(value));
                     if (byteSpan.Length <= index + 1)
                         break;
-                    //prevlastLine = lastLine;
-                    //lastLine = byteSpan.Slice(0, index);
                     byteSpan = byteSpan.Slice(index + 1);
                     index = byteSpan.IndexOf((byte)'\n');
                 }
-                //Console.WriteLine(Encoding.UTF8.GetString(prevlastLine));
-                //Console.WriteLine(Encoding.UTF8.GetString(lastLine));
-                //var i = 0;
-                //while (i < length && *buffor != 0)
-                //{
-                //    if ((char)*buffor == '\n')
-                //    {
-                //        count++;
-                //    }
-                //    buffor++;
-                //    i++;
-                //}
             }
             finally
             {
