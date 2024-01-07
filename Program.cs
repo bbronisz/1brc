@@ -184,7 +184,7 @@ class CityInfo
     public void Merge(CityInfo other)
     {
         if (other.Min < Min) Min = other.Min;
-        if (other.Min > Max) Max = other.Max;
+        if (other.Max > Max) Max = other.Max;
         Sum += other.Sum;
         Count += other.Count;
     }
