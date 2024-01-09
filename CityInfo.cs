@@ -26,8 +26,8 @@ internal class CityInfo
 
     public void Merge(CityInfo other)
     {
-        if (other.Min < Min) Min = other.Min;
-        if (other.Max > Max) Max = other.Max;
+        Min = double.Min(Min, other.Min);
+        Max = double.Max(Max, other.Max);
         Sum += other.Sum;
         Count += other.Count;
     }
