@@ -2,13 +2,18 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.IO.MemoryMappedFiles;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using System.Text;
 
 internal class Program
 {
+    public static int RunningThreads;
+
     private static void Main(string[] args)
     {
         Console.OutputEncoding = Encoding.UTF8;
+        Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.AboveNormal;
 
         var ok = ParseArgs(args, out bool debug, out string? filePath);
         if (!ok)
@@ -29,16 +34,37 @@ internal class Program
 
     private static List<Runner> ReadUnsafe(string path)
     {
+        var waitHandle = new AutoResetEvent(false);
         using (var mmf = MemoryMappedFile.CreateFromFile(path, FileMode.Open))
         {
             var runners = GetRunners(mmf);
-            foreach (var runner in runners)
+            var i = 0;
+            do
             {
-                runner.Join();
+                var runningThreads = Interlocked.CompareExchange(ref RunningThreads, 0, 0);
+                if (runningThreads < Consts.MaxRunningThreads)
+                {
+                    int prevValue = Interlocked.CompareExchange(ref RunningThreads, runningThreads + 1, runningThreads);
+                    if (prevValue == runningThreads)
+                    {
+                        runners[i].Start(waitHandle);
+                        i++;
+                        continue;
+                    }
+                }
+
+                waitHandle.WaitOne(TimeSpan.FromSeconds(2));
             }
+            while (i < runners.Count);
+            while (AreRunning(runners))
+                waitHandle.WaitOne(TimeSpan.FromMilliseconds(500));
+
             return runners;
         }
     }
+
+    private static bool AreRunning(List<Runner> runners) =>
+        runners.Any(x => !x.Finished);
 
     private static List<Runner> GetRunners(MemoryMappedFile mmf)
     {
@@ -129,7 +155,7 @@ internal class Program
 
     private static void RunWithDebugInfo(string path)
     {
-        Console.WriteLine("Start!");
+        Console.WriteLine("Start: {0}; {1}; {2}!", Sse2.IsSupported, Vector512.IsHardwareAccelerated, Vector256.IsHardwareAccelerated);
         Console.WriteLine();
 
         using var proc = Process.GetCurrentProcess();
@@ -142,6 +168,6 @@ internal class Program
         peak = peak / (1024 * 1024);
         Console.WriteLine();
         var sum = runners.Select(x => x.Result).Sum();
-        Console.WriteLine("Finished: {0:0.###} sec; peak: {1:0.###} MB; lines: {2}", sw.Elapsed.TotalSeconds, peak, sum);
+        Console.WriteLine("Finished: {0:0.###} sec; peak: {1:0.###} MB; lines: {2}; cities: {3}", sw.Elapsed.TotalSeconds, peak, sum, result.Count);
     }
 }

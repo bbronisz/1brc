@@ -4,11 +4,13 @@ using System.Text;
 
 class Runner
 {
+    //private static SemaphoreSlim Semaphore = new SemaphoreSlim(8);
     private readonly MemoryMappedViewAccessor accessor;
     private readonly MemoryMappedViewAccessor? prevAccessor;
     private readonly Dictionary<int, CityInfo> results;
     private readonly int length;
     private readonly Thread thread;
+    private bool finished;
 
     public Runner(MemoryMappedViewAccessor accessor, MemoryMappedViewAccessor? prevAccessor, int length)
     {
@@ -23,23 +25,33 @@ class Runner
         }
         results = new Dictionary<int, CityInfo>(512);
         thread = new Thread(ThreadMethod);
-        thread.Start();
+        thread.Priority = ThreadPriority.AboveNormal;
     }
 
     public int Result { get; private set; }
+    public bool Finished => finished;
     public Dictionary<int, CityInfo> Results => results;
 
-    public void Join() => thread.Join();
+    public void Start(AutoResetEvent autoResetEvent) => thread.Start(autoResetEvent);
 
-    private void ThreadMethod()
+    private void ThreadMethod(object? state)
     {
+        var autoResetEvent = state as AutoResetEvent;
         try
         {
+            //Semaphore.Wait();
             ParseFile();
         }
         catch (Exception ex)
         {
             Console.WriteLine(ex.ToString());
+        }
+        finally
+        {
+            Volatile.Write(ref finished, true);
+            Interlocked.Decrement(ref Program.RunningThreads);
+            autoResetEvent?.Set();
+            //Semaphore.Release();
         }
     }
 
@@ -52,12 +64,12 @@ class Runner
             accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref buffor);
             try
             {
-                var byteSpan = new ReadOnlySpan<byte>(buffor, length);
+                var byteSpan = new Span<byte>(buffor, length);
                 var index = byteSpan.GetNewLineIndex();
                 if (HandleSplitInTheMiddle(byteSpan, index))
                 {
                     count++;
-                    byteSpan = byteSpan.Slice(index + 1);
+                    byteSpan = byteSpan.Slice(index + Consts.NewLineLength);
                     index = byteSpan.GetNewLineIndex();
                 }
 
@@ -67,9 +79,9 @@ class Runner
 
                     AddCity(byteSpan.Slice(0, index));
 
-                    if (byteSpan.Length <= index + 1)
+                    if (byteSpan.Length <= index + Consts.NewLineLength)
                         break;
-                    byteSpan = byteSpan.Slice(index + 1);
+                    byteSpan = byteSpan.Slice(index + Consts.NewLineLength);
                     if (byteSpan[0] == '\0')
                         break;
                     index = byteSpan.GetNewLineIndex();
@@ -84,7 +96,7 @@ class Runner
         Result = count;
     }
 
-    private bool HandleSplitInTheMiddle(ReadOnlySpan<byte> bytesSpan, int newLineIndex)
+    private bool HandleSplitInTheMiddle(Span<byte> bytesSpan, int newLineIndex)
     {
         if (prevAccessor == null)
             return false;
@@ -96,24 +108,18 @@ class Runner
         prevSpan.CopyTo(wholeLine);
         bytesSpan.Slice(0, newLineIndex).CopyTo(wholeLine.Slice(prevSpan.Length));
 
-        //Console.WriteLine(string.Concat("[", Encoding.UTF8.GetString(prevSpan), "] [", Encoding.UTF8.GetString(bytesSpan.Slice(0, newLineIndex)), "] [",
-        //    Encoding.UTF8.GetString(wholeLine)));
-
         AddCity(wholeLine);
 
         return true;
     }
 
-    private void AddCity(ReadOnlySpan<byte> line)
+    private void AddCity(Span<byte> line)
     {
         var separatorIndex = line.IndexOf((byte)';');
         if (separatorIndex < 0)
             throw new Exception(string.Format("Wrongly formatted line: {0}", Encoding.UTF8.GetString(line)));
         var citySpan = line.Slice(0, separatorIndex);
-        var hc = new HashCode();
-        hc.AddBytes(citySpan);
-        var hashCode = hc.ToHashCode();
-        //var hashCode = (int)byteSpan[0];
+        var hashCode = GetHashCode(citySpan);
         var value = ParseNumber(line.Slice(separatorIndex + 1));
         if (results.TryGetValue(hashCode, out CityInfo? cityInfo))
             cityInfo.Add(value);
@@ -121,7 +127,15 @@ class Runner
             results.Add(hashCode, new CityInfo(Encoding.UTF8.GetString(citySpan), value));
     }
 
-    private static double ParseNumber(ReadOnlySpan<byte> line)
+    private static int GetHashCode(Span<byte> citySpan)
+    {
+        //return city.Length;
+        var hc = new HashCode();
+        hc.AddBytes(citySpan);
+        return hc.ToHashCode();
+    }
+
+    private static double ParseNumber(Span<byte> line)
     {
         var sign = 1d;
         if (line[0] == '-')
@@ -139,7 +153,7 @@ class Runner
         return sign * result;
     }
 
-    private static int GetNatural(ReadOnlySpan<byte> line)
+    private static int GetNatural(Span<byte> line)
     {
         var dec = 1;
         var result = 0;
@@ -151,7 +165,7 @@ class Runner
         return result;
     }
 
-    private static double GetDecimal(ReadOnlySpan<byte> line)
+    private static double GetDecimal(Span<byte> line)
     {
         if (line.IsEmpty)
             return 0d;
@@ -165,13 +179,13 @@ class Runner
         return result;
     }
 
-    private static unsafe ReadOnlySpan<byte> GetPrev(MemoryMappedViewAccessor prevAccessor, Span<byte> buffer)
+    private static unsafe Span<byte> GetPrev(MemoryMappedViewAccessor prevAccessor, Span<byte> buffer)
     {
         byte* bytes = null;
         prevAccessor.SafeMemoryMappedViewHandle.AcquirePointer(ref bytes);
         try
         {
-            var localspan = new ReadOnlySpan<byte>(bytes, (int)prevAccessor.SafeMemoryMappedViewHandle.ByteLength);
+            var localspan = new Span<byte>(bytes, (int)prevAccessor.SafeMemoryMappedViewHandle.ByteLength);
             //Console.WriteLine("len: {0}", localspan.Length);
             var index = localspan.GetLastNewLineIndex();
             if (index < 0 || index == localspan.Length - Consts.NewLineLength)

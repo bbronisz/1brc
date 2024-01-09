@@ -1,5 +1,5 @@
 ﻿// See https://aka.ms/new-console-template for more information
-class CityInfo
+internal class CityInfo
 {
     public CityInfo(string city, double value)
     {
