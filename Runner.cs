@@ -2,9 +2,8 @@
 using System.IO.MemoryMappedFiles;
 using System.Text;
 
-class Runner
+internal class Runner
 {
-    //private static SemaphoreSlim Semaphore = new SemaphoreSlim(8);
     private readonly MemoryMappedViewAccessor accessor;
     private readonly MemoryMappedViewAccessor? prevAccessor;
     private readonly Dictionary<int, CityInfo> results;
@@ -26,20 +25,20 @@ class Runner
         results = new Dictionary<int, CityInfo>(512);
         thread = new Thread(ThreadMethod);
         thread.Priority = ThreadPriority.AboveNormal;
+        thread.Start(null); ;
     }
 
     public int Result { get; private set; }
     public bool Finished => finished;
     public Dictionary<int, CityInfo> Results => results;
 
-    public void Start(AutoResetEvent autoResetEvent) => thread.Start(autoResetEvent);
+    public void Join() => thread.Join();
 
     private void ThreadMethod(object? state)
     {
-        var autoResetEvent = state as AutoResetEvent;
+        //var autoResetEvent = state as AutoResetEvent;
         try
         {
-            //Semaphore.Wait();
             ParseFile();
         }
         catch (Exception ex)
@@ -49,9 +48,8 @@ class Runner
         finally
         {
             Volatile.Write(ref finished, true);
-            Interlocked.Decrement(ref Program.RunningThreads);
-            autoResetEvent?.Set();
-            //Semaphore.Release();
+            //Interlocked.Decrement(ref Program.RunningThreads);
+            //autoResetEvent?.Set();
         }
     }
 
