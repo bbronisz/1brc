@@ -147,7 +147,7 @@ internal class Runner
             if (b1 == 0)
                 continue;
             hc ^= (b1 << index);
-            index += 5;
+            index += 4;
         }
         return hc;
     }
