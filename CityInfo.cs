@@ -34,7 +34,7 @@ internal class CityInfo
 
     public void PrintResult(string prev)
     {
-        Console.Write("{4}{0}={1:0.0}/{2:0.0}/{3:0.0}", City, Min, Sum / Count, Max, prev);
+        Console.Write("{4}{0}={1:0.0}/{2:0.0}/{3:0.0}", City, Min * 0.1, (Sum * 0.1) / Count, Max * 0.1, prev);
     }
 }
 

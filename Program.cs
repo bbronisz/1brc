@@ -12,6 +12,7 @@ internal class Program
     {
         Console.OutputEncoding = Encoding.UTF8;
         TrySetPriorityClass();
+        GC.TryStartNoGCRegion(13795358480L, true);
 
         var ok = ParseArgs(args, out string? filePath, out bool debug, out bool useNewLines);
         if (!ok)
@@ -39,6 +40,11 @@ internal class Program
             creationTook = sw.Elapsed;
             foreach (var runner in runners)
             {
+                runner.Start();
+            }
+
+            foreach (var runner in runners)
+            {
                 runner.Join();
             }
 
@@ -54,15 +60,13 @@ internal class Program
         int length;
         bool last;
         var tasks = new List<Runner>();
-        var flag = new ManualResetEvent(false);
         do
         {
             (accessor, prevAccessor, length, last) = GetAccessor(mmf, ref offset);
             //Console.WriteLine("Creating runner: {0}", tasks.Count);
-            tasks.Add(new Runner(accessor, prevAccessor, length, flag));
+            tasks.Add(new Runner(accessor, prevAccessor, length));
         }
         while (!last);
-        flag.Set();
         return tasks;
     }
 

@@ -4,18 +4,18 @@ using System.Text;
 
 internal class Runner
 {
+    private static int InstanceCounter;
     private readonly MemoryMappedViewAccessor accessor;
     private readonly MemoryMappedViewAccessor? prevAccessor;
-    private readonly EventWaitHandle startFlag;
     private readonly Dictionary<int, CityInfo> results;
     private readonly int length;
     private readonly Thread thread;
 
-    public Runner(MemoryMappedViewAccessor accessor, MemoryMappedViewAccessor? prevAccessor, int length, EventWaitHandle startFlag)
+    public Runner(MemoryMappedViewAccessor accessor, MemoryMappedViewAccessor? prevAccessor, int length)
     {
+        InstanceCounter++;
         this.accessor = accessor;
         this.prevAccessor = prevAccessor;
-        this.startFlag = startFlag;
         if (length > 0)
             this.length = length;
         else
@@ -26,16 +26,21 @@ internal class Runner
         results = new Dictionary<int, CityInfo>(1024);
 
         thread = new Thread(ThreadMethod);
+        thread.Name = $"Number: {InstanceCounter}";
         try
         {
             thread.Priority = ThreadPriority.AboveNormal;
         }
         catch { }
-        thread.Start();
     }
 
     public int Result { get; private set; }
     public Dictionary<int, CityInfo> Results => results;
+
+    public void Start()
+    {
+        thread.Start();
+    }
 
     public void Join()
     {
@@ -46,7 +51,6 @@ internal class Runner
     {
         try
         {
-            startFlag.WaitOne();
             ParseFile();
         }
         catch (Exception ex)
@@ -65,26 +69,61 @@ internal class Runner
             try
             {
                 var byteSpan = new Span<byte>(buffor, length);
-                var index = byteSpan.GetNewLineIndex();
-                if (HandleSplitInTheMiddle(byteSpan, index))
+                if (HandleSplitInTheMiddle(byteSpan, out int firstLineEnd))
                 {
                     count++;
-                    byteSpan = byteSpan.Slice(index + Consts.NewLineLength);
-                    index = byteSpan.GetNewLineIndex();
+                    byteSpan = byteSpan.Slice(firstLineEnd + Consts.NewLineLength);
                 }
-
-                while (index >= 0)
+                while (byteSpan.Length > 5)
                 {
-                    count++;
-
-                    AddCity(byteSpan.Slice(0, index));
-
-                    if (byteSpan.Length <= index + Consts.NewLineLength)
+                    var cityLength = 0;
+                    byte b;
+                    var hc = 0;
+                    while (cityLength < byteSpan.Length && (b = byteSpan[cityLength]) != (byte)';')
+                    {
+                        var b1 = NormalizationArray[b];
+                        if (b1 != 0)
+                            hc = hc * 311 + b1;
+                        cityLength++;
+                    }
+                    //Console.WriteLine($"length: {byteSpan.Length}; index: {cityLength}; line: {count}; thread {Thread.CurrentThread.Name}; text: {Encoding.UTF8.GetString(byteSpan)}\n"
+                    //    + $"prev line: {prevLine}");
+                    if (cityLength >= byteSpan.Length - 5)
                         break;
-                    byteSpan = byteSpan.Slice(index + Consts.NewLineLength);
+
+                    var tempLength = 0;
+                    var tempIndex = cityLength + 1;
+                    var temp = 0;
+                    var minus = false;
+                    if (byteSpan[tempIndex] == (byte)'-')
+                    {
+                        tempIndex++;
+                        tempLength++;
+                        minus = true;
+                    }
+                    while ((b = byteSpan[tempIndex]) != (byte)'.')
+                    {
+                        temp = (temp * 10) + (b - (byte)'0');
+                        tempIndex++;
+                        tempLength++;
+                    }
+                    tempIndex++;
+                    tempLength += 2;
+                    b = byteSpan[tempIndex];
+                    temp = (temp * 10) + (b - (byte)'0');
+                    count++;
+                    if (minus)
+                        temp *= -1;
+                    if (results.TryGetValue(hc, out CityInfo? cityInfo))
+                        cityInfo.Add(temp);
+                    else
+                        results.Add(hc, new CityInfo(Encoding.UTF8.GetString(byteSpan.Slice(0, cityLength)), temp));
+
+                    if (byteSpan.Length <= cityLength + 1 + tempLength + Consts.NewLineLength)
+                        break;
+                    byteSpan = byteSpan.Slice(cityLength + 1 + tempLength + Consts.NewLineLength);
                     if (byteSpan[0] == '\0')
                         break;
-                    index = byteSpan.GetNewLineIndex();
                 }
             }
             finally
@@ -96,21 +135,33 @@ internal class Runner
         Result = count;
     }
 
-    private bool HandleSplitInTheMiddle(Span<byte> bytesSpan, int newLineIndex)
+    private unsafe bool HandleSplitInTheMiddle(Span<byte> bytesSpan, out int firstLineEnd)
     {
+        firstLineEnd = 0;
         if (prevAccessor == null)
             return false;
-        Span<byte> buffer = stackalloc byte[Consts.PrevAccessorLength];
-        var prevSpan = GetPrev(prevAccessor, buffer);
-        if (prevSpan.IsEmpty)
-            return false;
-        Span<byte> wholeLine = stackalloc byte[prevSpan.Length + newLineIndex];
-        prevSpan.CopyTo(wholeLine);
-        bytesSpan.Slice(0, newLineIndex).CopyTo(wholeLine.Slice(prevSpan.Length));
+        byte* bytes = null;
+        prevAccessor.SafeMemoryMappedViewHandle.AcquirePointer(ref bytes);
+        try
+        {
+            var localspan = new Span<byte>(bytes, (int)prevAccessor.SafeMemoryMappedViewHandle.ByteLength);
+            //Console.WriteLine("len: {0}", localspan.Length);
+            var index = localspan.GetLastNewLineIndex();
+            if (index < 0 || index == localspan.Length - Consts.NewLineLength)
+                return false;
+            localspan = localspan.Slice(index + Consts.NewLineLength);
+            firstLineEnd = bytesSpan.GetNewLineIndex();
+            Span<byte> wholeLine = stackalloc byte[localspan.Length + firstLineEnd];
+            localspan.CopyTo(wholeLine);
+            bytesSpan.Slice(0, firstLineEnd).CopyTo(wholeLine.Slice(localspan.Length));
+            AddCity(wholeLine);
 
-        AddCity(wholeLine);
-
-        return true;
+            return true;
+        }
+        finally
+        {
+            prevAccessor.SafeMemoryMappedViewHandle.ReleasePointer();
+        }
     }
 
     private void AddCity(Span<byte> line)
@@ -140,34 +191,40 @@ internal class Runner
     private static int GetHashCode(Span<byte> citySpan)
     {
         var hc = 0;
-        var index = 0;
         for (var i = 0; i < citySpan.Length; i++)
         {
             var b1 = NormalizationArray[citySpan[i]];
             if (b1 == 0)
                 continue;
-            hc ^= (b1 << index);
-            index += 4;
+            hc = hc * 311 + b1;
         }
         return hc;
     }
 
     private static double ParseNumber(Span<byte> line)
     {
-        var sign = 1d;
+        var minus = false;
         if (line[0] == '-')
         {
-            sign = -1d;
+            minus = true;
             line = line.Slice(1);
         }
-        var dotIndex = line.IndexOf((byte)'.');
-        if (dotIndex < 0)
+
+        byte b;
+        var result = 0;
+        var index = 0;
+        while ((b = line[index]) != '.')
         {
-            return GetNatural(line) * sign;
+            result = (result * 10) + (b - '0');
+            index++;
         }
-        double result = GetNatural(line.Slice(0, dotIndex));
-        result += GetDecimal(line.Slice(dotIndex + 1));
-        return sign * result;
+        index++;
+        line = line.Slice(index);
+        b = line[0];
+        result = (result * 10) + (b - '0');
+        if (minus)
+            result *= -1;
+        return result;
     }
 
     private static int GetNatural(Span<byte> line)
@@ -194,27 +251,6 @@ internal class Runner
             dec /= 10;
         }
         return result;
-    }
-
-    private static unsafe Span<byte> GetPrev(MemoryMappedViewAccessor prevAccessor, Span<byte> buffer)
-    {
-        byte* bytes = null;
-        prevAccessor.SafeMemoryMappedViewHandle.AcquirePointer(ref bytes);
-        try
-        {
-            var localspan = new Span<byte>(bytes, (int)prevAccessor.SafeMemoryMappedViewHandle.ByteLength);
-            //Console.WriteLine("len: {0}", localspan.Length);
-            var index = localspan.GetLastNewLineIndex();
-            if (index < 0 || index == localspan.Length - Consts.NewLineLength)
-                return [];
-            localspan = localspan.Slice(index + Consts.NewLineLength);
-            localspan.CopyTo(buffer);
-            return buffer.Slice(0, localspan.Length);
-        }
-        finally
-        {
-            prevAccessor.SafeMemoryMappedViewHandle.ReleasePointer();
-        }
     }
 }
 
